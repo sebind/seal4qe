@@ -1,4 +1,4 @@
-# Seal — Quantum ESPRESSO Studio
+# seal4QE — Quantum ESPRESSO Studio
 
 **Live Application:** [https://sebind.github.io/seal4qe/](https://sebind.github.io/seal4qe/)
 
