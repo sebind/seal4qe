@@ -271,7 +271,10 @@ Or:
       for (const sp of speciesValues) {
         if (!sp.pseudo) continue;
         try {
-          const resp = await fetch(`${import.meta.env.BASE_URL}pseudopot/${encodeURIComponent(sp.pseudo)}`);
+          let resp = await fetch(`./public/pseudopot/${encodeURIComponent(sp.pseudo)}`);
+          if (!resp.ok) {
+            resp = await fetch(`./pseudopot/${encodeURIComponent(sp.pseudo)}`);
+          }
           if (resp.ok) {
             const upfText = await resp.text();
             const upfHandle = await pseudoDir.getFileHandle(sp.pseudo, { create: true });

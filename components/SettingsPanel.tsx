@@ -851,7 +851,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
                               {isInLibrary && (
                                 <a
-                                  href={`${import.meta.env.BASE_URL}pseudopot/${spec.pseudo}`}
+                                  href={`./public/pseudopot/${spec.pseudo}`}
                                   download={spec.pseudo}
                                   className="text-[10px] text-teal-700 hover:text-teal-900 font-bold flex items-center gap-0.5 hover:underline shrink-0"
                                   title={`Download ${spec.pseudo} from library`}
