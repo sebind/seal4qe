@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/constants.ts","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/components/settingspanel.tsx","./src/components/structureviewer.tsx","./src/services/geminiservice.ts","./src/utils/latticeutils.ts","./src/utils/localparsers.ts","./src/utils/qegenerator.ts","./src/utils/symmetryutils.ts"],"errors":true,"version":"5.8.3"}

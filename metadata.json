@@ -1,0 +1,6 @@
+{
+  "name": "Seal - Quantum ESPRESSO Input Generator",
+  "description": "A high-performance visual interface for generating Quantum ESPRESSO input files from crystal structure data (CIF, XYZ, VASP, XSF), featuring fast local parsing and Gemini integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

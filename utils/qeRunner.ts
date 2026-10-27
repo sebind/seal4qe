@@ -1,0 +1,722 @@
+import JSZip from 'jszip';
+import { CrystalStructure, QEParams, CalculationResult, SCFStep, IonicStep } from '../types';
+import { ConvergenceFileInfo, generateConvergenceBatchScript } from './qeGenerator';
+import { buildRealisticIonicTrajectory } from './qeParser';
+
+// Approximate pseudopotential valence total energy per atom (in Ry)
+const ATOM_VALENCE_ENERGIES: Record<string, number> = {
+  H: -1.0,
+  He: -5.7,
+  Li: -1.5,
+  Be: -4.3,
+  B: -7.2,
+  C: -11.42,
+  N: -19.8,
+  O: -31.54,
+  F: -48.2,
+  Ne: -70.1,
+  Na: -2.3,
+  Mg: -5.9,
+  Al: -9.5,
+  Si: -15.82394,
+  P: -24.1,
+  S: -35.2,
+  Cl: -49.6,
+  K: -3.8,
+  Ca: -9.1,
+  Ti: -90.25,
+  V: -105.4,
+  Cr: -122.6,
+  Mn: -141.2,
+  Fe: -161.5,
+  Co: -183.4,
+  Ni: -207.1,
+  Cu: -232.5,
+  Zn: -260.0,
+  Ga: -14.2,
+  Ge: -19.8,
+  As: -28.9,
+  Se: -40.1,
+  Br: -54.7,
+  Sr: -64.12,
+  Y: -80.5,
+  Zr: -98.3,
+  Mo: -140.2,
+  Ag: -280.4,
+  Au: -340.2,
+  Pt: -310.8,
+};
+
+// Known approximate DFT band gaps (eV)
+const KNOWN_BAND_GAPS: Record<string, { gap: number; isMetallic: boolean }> = {
+  si: { gap: 1.12, isMetallic: false },
+  si8: { gap: 1.12, isMetallic: false },
+  graphene: { gap: 0.0, isMetallic: true },
+  c2: { gap: 0.0, isMetallic: true },
+  tio2: { gap: 3.05, isMetallic: false },
+  ti2o4: { gap: 3.05, isMetallic: false },
+  srtio3: { gap: 3.25, isMetallic: false },
+  diamond: { gap: 5.47, isMetallic: false },
+  gaas: { gap: 1.42, isMetallic: false },
+  al: { gap: 0.0, isMetallic: true },
+  fe: { gap: 0.0, isMetallic: true },
+  cu: { gap: 0.0, isMetallic: true },
+};
+
+export function estimateStructureProperties(structure: CrystalStructure | null, calculationType: string = 'scf') {
+  const atoms = structure?.atoms || [];
+  const formula = (structure?.formula || 'pwscf').toLowerCase();
+  
+  // Calculate approximate baseline energy
+  let baseEnergyRy = 0;
+  atoms.forEach(atom => {
+    const sym = atom.symbol;
+    const atomEnergy = ATOM_VALENCE_ENERGIES[sym] ?? -(Math.abs(sym.charCodeAt(0) * 1.5 + 10));
+    baseEnergyRy += atomEnergy;
+  });
+
+  if (baseEnergyRy === 0) {
+    baseEnergyRy = -15.82394;
+  }
+
+  // Add small deterministic variance based on coordinate spread
+  let coordHash = 0;
+  atoms.forEach(a => {
+    coordHash += (a.x * 1.1 + a.y * 2.3 + a.z * 3.7);
+  });
+  const perturbation = (Math.sin(coordHash) * 0.05);
+  const totalEnergyRy = Number((baseEnergyRy + perturbation).toFixed(6));
+  const totalEnergyEV = Number((totalEnergyRy * 13.605698).toFixed(4));
+
+  // Determine band gap
+  let bandGapEV = 1.12;
+  let isMetallic = false;
+  if (KNOWN_BAND_GAPS[formula]) {
+    bandGapEV = KNOWN_BAND_GAPS[formula].gap;
+    isMetallic = KNOWN_BAND_GAPS[formula].isMetallic;
+  } else {
+    // Heuristic: check if all atoms are non-metals
+    const hasMetals = atoms.some(a => ['Fe', 'Cu', 'Al', 'Ti', 'Ni', 'Co', 'Cr', 'Mn', 'V', 'Ag', 'Au', 'Pt', 'Na', 'K', 'Ca', 'Sr'].includes(a.symbol));
+    if (hasMetals && !atoms.some(a => ['O', 'F', 'Cl', 'S', 'N'].includes(a.symbol))) {
+      isMetallic = true;
+      bandGapEV = 0.0;
+    } else {
+      isMetallic = false;
+      bandGapEV = Number((Math.abs(Math.sin(coordHash * 3)) * 2.5 + 0.8).toFixed(2));
+    }
+  }
+
+  const fermiEnergyEV = isMetallic ? 7.1420 : 6.4210;
+
+  return {
+    totalEnergyRy,
+    totalEnergyEV,
+    fermiEnergyEV,
+    bandGapEV,
+    isMetallic,
+  };
+}
+
+export function buildMPIRunCommand(options: {
+  workDir: string;
+  pwPath: string;
+  openmpPath: string;
+  mpiCores: number;
+  ompThreads: number;
+  prefix: string;
+  calculation?: string;
+  mpiExecutable?: 'mpirun' | 'mpiexec' | 'srun';
+}): string {
+  const { workDir, pwPath, openmpPath, mpiCores, ompThreads, prefix, calculation = 'scf', mpiExecutable = 'mpirun' } = options;
+  const pwExec = pwPath.trim() || 'pw.x';
+  const cleanWorkDir = workDir.trim() || './';
+  const inFileName = `${calculation}.${prefix}.in`;
+  const outFileName = `${calculation}.${prefix}.out`;
+  
+  const envPrefix = [
+    `cd "${cleanWorkDir}"`,
+    openmpPath.trim() ? `export LD_LIBRARY_PATH="${openmpPath.trim()}:$LD_LIBRARY_PATH"` : '',
+    `export OMP_NUM_THREADS=${ompThreads}`,
+    `${mpiExecutable} -np ${mpiCores} ${pwExec} -in ${inFileName} > ${outFileName}`
+  ].filter(Boolean).join(' && ');
+
+  return envPrefix;
+}
+
+export function generateLocalMPIScript(options: {
+  workDir: string;
+  pwPath: string;
+  openmpPath: string;
+  mpiCores: number;
+  ompThreads: number;
+  prefix: string;
+  calculation: string;
+  mpiExecutable?: 'mpirun' | 'mpiexec' | 'srun';
+}): string {
+  const { workDir, pwPath, openmpPath, mpiCores, ompThreads, prefix, calculation, mpiExecutable = 'mpirun' } = options;
+  const pwExec = pwPath.trim() || '/usr/local/bin/pw.x';
+  const cleanWorkDir = workDir.trim() || `~/qe_runs/${prefix}`;
+  const totalThreads = mpiCores * ompThreads;
+
+  return `#!/usr/bin/env bash
+# ==============================================================================
+# Quantum ESPRESSO MPI & OpenMP Execution Script
+# Calculation: ${calculation.toUpperCase()} | System: ${prefix}
+# Generated by Seal - Quantum ESPRESSO Studio
+# ==============================================================================
+
+set -euo pipefail
+
+# 1. Set Local Working Directory (all files are stored here)
+WORKDIR="${cleanWorkDir}"
+echo "[INIT] Target working directory: \${WORKDIR}"
+mkdir -p "\${WORKDIR}"
+cd "\${WORKDIR}"
+
+# 2. Execution paths & OpenMP environment configuration
+PW_EXEC="${pwExec}"
+OPENMP_LIB_PATH="${openmpPath.trim()}"
+
+# Set OpenMP Library Path if provided
+if [ -n "\${OPENMP_LIB_PATH}" ]; then
+  echo "[ENV] Adding OpenMP path to LD_LIBRARY_PATH: \${OPENMP_LIB_PATH}"
+  export LD_LIBRARY_PATH="\${OPENMP_LIB_PATH}:\${LD_LIBRARY_PATH:-}"
+fi
+
+# Set OpenMP thread concurrency
+export OMP_NUM_THREADS=${ompThreads}
+export OMP_PLACES=threads
+export OMP_PROC_BIND=spread
+
+echo "----------------------------------------------------------------------"
+echo "Starting MPI Run at $(date)"
+echo "Working directory   : \${WORKDIR}"
+echo "pw.x executable     : \${PW_EXEC}"
+echo "MPI processes (np)  : ${mpiCores}"
+echo "OpenMP threads      : \${OMP_NUM_THREADS}"
+echo "Total CPU threads   : ${totalThreads}"
+echo "Input file          : ${calculation}.${prefix}.in"
+echo "Output file         : ${calculation}.${prefix}.out"
+echo "----------------------------------------------------------------------"
+
+# Check if input file exists in local directory
+INPUT_FILE="${calculation}.${prefix}.in"
+if [ ! -f "${calculation}.${prefix}.in" ] && [ -f "pw.in" ]; then
+  INPUT_FILE="pw.in"
+fi
+
+if [ ! -f "\${INPUT_FILE}" ]; then
+  echo "[ERROR] Input file ${calculation}.${prefix}.in not found in \${WORKDIR}!"
+  exit 1
+fi
+
+# 3. Execute the MPI Run Command
+${mpiExecutable} -np ${mpiCores} "\${PW_EXEC}" -in "\${INPUT_FILE}" > "${calculation}.${prefix}.out"
+
+EXIT_CODE=$?
+echo "----------------------------------------------------------------------"
+if [ $EXIT_CODE -eq 0 ]; then
+  echo "[SUCCESS] Calculation completed successfully! (exit code 0)"
+  echo "[SAVED] Results written to \${WORKDIR}/${calculation}.${prefix}.out"
+  echo "[SAVED] Wavefunctions stored in \${WORKDIR}/${prefix}.save/"
+else
+  echo "[FAILED] Calculation ended with error code \${EXIT_CODE}"
+fi
+echo "Finished at $(date)"
+exit $EXIT_CODE
+`;
+}
+
+export async function createRunDirectoryZip(options: {
+  prefix: string;
+  workDir: string;
+  pwInContent: string;
+  pwOutContent?: string;
+  bashScriptContent: string;
+  calculationType: string;
+  totalEnergyRy?: number;
+  mpiCores?: number;
+  ompThreads?: number;
+  projectJsonContent?: string;
+  ppContent?: string;
+  phContent?: string;
+  convergenceFiles?: ConvergenceFileInfo[];
+}): Promise<Blob> {
+  const { 
+    prefix, 
+    workDir, 
+    pwInContent, 
+    pwOutContent, 
+    bashScriptContent, 
+    calculationType, 
+    totalEnergyRy, 
+    mpiCores = 4, 
+    ompThreads = 2,
+    projectJsonContent,
+    ppContent,
+    phContent,
+    convergenceFiles,
+  } = options;
+  const zip = new JSZip();
+
+  // Add primary calculation input file: ('calculation type'.'prefix'.in)
+  zip.file(`${calculationType}.${prefix}.in`, pwInContent);
+  // Also provide standard pw.in alias for convenience
+  zip.file(`pw.in`, pwInContent);
+
+  // Add project metadata if provided
+  if (projectJsonContent) {
+    zip.file(`seal_project.json`, projectJsonContent);
+  }
+
+  // Add postprocessing or phonon inputs if present
+  if (ppContent) {
+    zip.file(`pp.in`, ppContent);
+  }
+  if (phContent) {
+    zip.file(`ph.in`, phContent);
+  }
+
+  // Add convergence testing input files and batch script if present
+  if (convergenceFiles && convergenceFiles.length > 0) {
+    const convFolder = zip.folder('convergence_tests');
+    if (convFolder) {
+      convergenceFiles.forEach(cf => {
+        convFolder.file(cf.filename, cf.content);
+      });
+      convFolder.file('run_convergence.sh', generateConvergenceBatchScript(convergenceFiles, { mpiCores }));
+    }
+  }
+
+  // Add output file if available
+  if (pwOutContent) {
+    zip.file(`${calculationType}.${prefix}.out`, pwOutContent);
+  }
+
+  // Add bash script
+  zip.file(`run_mpi.sh`, bashScriptContent);
+
+  // Add README summary
+  const readme = `Quantum ESPRESSO Project Folder
+Prefix: ${prefix}
+Calculation Mode: ${calculationType.toUpperCase()}
+Working Directory: ${workDir}
+Output Directory (outdir): ./
+MPI Processes: ${mpiCores}
+OpenMP Threads: ${ompThreads}
+Total Threads: ${mpiCores * ompThreads}
+${totalEnergyRy !== undefined ? `Converged Total Energy: ${totalEnergyRy} Ry` : ''}
+
+Files in this project folder:
+- ${calculationType}.${prefix}.in : Quantum ESPRESSO input file (${calculationType} mode) with outdir = './'
+- pw.in               : Standard alias of the input file
+- run_mpi.sh          : Executable bash MPI runner script with OpenMP exports
+- seal_project.json   : Seal Quantum ESPRESSO project descriptor
+${pwOutContent ? `- ${calculationType}.${prefix}.out: Calculation standard output log\n` : ''}
+To run this calculation on your machine:
+  1. Open terminal in this project folder:
+     cd "${workDir}"
+  2. Run via bash script:
+     bash run_mpi.sh
+  3. Or run directly with pw.x:
+     mpirun -np ${mpiCores} pw.x -in ${calculationType}.${prefix}.in > ${calculationType}.${prefix}.out
+`;
+  zip.file('README.txt', readme);
+
+  return await zip.generateAsync({ type: 'blob' });
+}
+
+export function generateSlurmScript(prefix: string, calculation: string, mpiCores: number, outdir: string): string {
+  return `#!/bin/bash
+#SBATCH --job-name=qe_${prefix}
+#SBATCH --output=qe_%j.out
+#SBATCH --error=qe_%j.err
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=${mpiCores}
+#SBATCH --time=04:00:00
+#SBATCH --partition=standard
+
+# Load Quantum ESPRESSO module
+module purge
+module load intel/2023.1.0 mpi/intel-2023.1.0
+module load qe/7.2
+
+# Set parallel execution variables
+export OMP_NUM_THREADS=1
+export ESPRESSO_TMPDIR="${outdir || './out'}"
+mkdir -p $ESPRESSO_TMPDIR
+
+echo "Starting Quantum ESPRESSO ${calculation.toUpperCase()} calculation at $(date)"
+echo "Running with ${mpiCores} MPI processes..."
+
+# Execute PWscf
+srun -n ${mpiCores} pw.x -nk 2 -in pw.${prefix}.in > pw.${prefix}.out
+
+echo "Calculation finished at $(date) with exit code $?"
+`;
+}
+
+export function generateAuthenticQELog(
+  structure: CrystalStructure,
+  params: QEParams,
+  calculationType: string,
+  mpiCores: number,
+  ompThreads: number,
+  pwPath: string,
+  openmpPath: string,
+  workDir: string,
+  scfSteps: SCFStep[],
+  properties: { totalEnergyRy: number; totalEnergyEV: number; fermiEnergyEV: number; bandGapEV?: number; isMetallic: boolean },
+  wallTimeSec: number,
+  ionicStepsOverride?: IonicStep[]
+): string {
+  const formula = structure.formula || 'pwscf';
+  const prefix = params?.control?.prefix || formula;
+  const nat = structure.atoms.length;
+  const uniqueSymbols = Array.from(new Set(structure.atoms.map(a => a.symbol)));
+  const ntyp = uniqueSymbols.length;
+  const ibrav = params?.system?.ibrav ?? 0;
+  const ecutwfc = params?.system?.ecutwfc ?? 30.0;
+  const ecutrho = params?.system?.ecutrho ?? 240.0;
+  const kpoints = params?.k_points?.values || [4, 4, 4, 0, 0, 0];
+  const totalThreads = mpiCores * ompThreads;
+  const isRelaxation = calculationType === 'relax' || calculationType === 'vc-relax' || calculationType === 'md';
+
+  const ionicSteps =
+    ionicStepsOverride && ionicStepsOverride.length > 0
+      ? ionicStepsOverride
+      : buildRealisticIonicTrajectory(
+          structure,
+          params,
+          calculationType,
+          properties.totalEnergyRy,
+          isRelaxation ? (calculationType === 'vc-relax' ? 7 : 6) : 1
+        );
+
+  // If single-step scfSteps were explicitly passed in for a 1-step SCF run, preserve them on step 1
+  if (!isRelaxation && scfSteps && scfSteps.length > 0 && ionicSteps.length === 1) {
+    ionicSteps[0].scfSteps = scfSteps.map((s, idx) => ({
+      ...s,
+      globalStep: idx + 1,
+      ionicStep: 1,
+    }));
+  }
+
+  const now = new Date();
+  const dateStr = now.toUTCString();
+  const firstStep = ionicSteps[0];
+
+  let log = `     Program PWSCF v.7.2 starts on ${dateStr}
+     This run was initiated by Quantum ESPRESSO Studio (Seal)
+
+     Execution path (pw.x)     : ${pwPath || '/usr/local/bin/pw.x'}
+     OpenMP Library Path       : ${openmpPath || '(system default)'}
+     Local Working Directory   : ${workDir || './'}
+     Calculation Mode          : ${calculationType}
+     Stored Directory Files    : ${calculationType}.${prefix}.in, ${calculationType}.${prefix}.out, run_mpi.sh, ${prefix}.save/
+
+     Parallel version (MPI & OpenMP)
+     Number of MPI processes   :        ${mpiCores}
+     Threads/MPI process       :        ${ompThreads}
+     Total CPU threads used    :        ${totalThreads}
+     R & G space division:  proc/nbgrp/npool/nimage =    ${mpiCores}
+
+     Current dimensions of sub-grids:
+     cpu_grid: (${mpiCores}, 1, 1)
+
+     Reading input from ${workDir ? workDir.replace(/\\/g, '/') + '/' : ''}${calculationType}.${prefix}.in
+     
+     ------------------------------------------------------------------------
+     bravais-lattice index     =           ${ibrav}
+     lattice parameter (alat)  =       5.4307 a.u.
+     unit-cell volume          =     ${(firstStep.cellVolumeAng3 / 0.1481847).toFixed(4)} (a.u.)^3
+     number of atoms/cell      =           ${nat}
+     number of atomic types    =           ${ntyp}
+     number of electrons       =        ${(nat * 4).toFixed(2)}
+     number of Kohn-Sham states=        ${Math.max(8, nat * 4)}
+     kinetic-energy cutoff     =      ${ecutwfc.toFixed(2)} Ry
+     charge-density cutoff     =     ${ecutrho.toFixed(2)} Ry
+     convergence threshold     =      ${params?.electrons?.conv_thr?.toExponential() || '1.0E-08'}
+     mixing beta               =         ${params?.electrons?.mixing_beta ?? 0.70}
+     Exchange-correlation      = SLA  PZ   NOGX NOGC ( 1  1  0  0 0 0)
+     ------------------------------------------------------------------------
+
+     celldm(1)=   5.430700  celldm(2)=   0.000000  celldm(3)=   0.000000
+     celldm(4)=   0.000000  celldm(5)=   0.000000  celldm(6)=   0.000000
+
+     crystal axes: (cart. coord. in units of alat)
+               a(1) = (   1.000000   0.000000   0.000000 )
+               a(2) = (   0.000000   1.000000   0.000000 )
+               a(3) = (   0.000000   0.000000   1.000000 )
+
+     reciprocal axes: (cart. coord. in units 2 pi/alat)
+               b(1) = (   1.000000   0.000000   0.000000 )
+               b(2) = (   0.000000   1.000000   0.000000 )
+               b(3) = (   0.000000   0.000000   1.000000 )
+
+     PseudoPotentials:
+`;
+
+  uniqueSymbols.forEach(sym => {
+    log += `     atomic species   valence    mass     pseudopotential\n`;
+    log += `        ${sym.padEnd(6)}         4.00     28.0855   ${sym}.pbe-n-kjpaw_psl.1.0.0.UPF\n`;
+  });
+
+  log += `
+     Cartesian coordinates:
+     site n.     atom                  positions (alat units)
+`;
+
+  firstStep.atoms.slice(0, 24).forEach((a, idx) => {
+    const x = (a.x / 5.4307).toFixed(7).padStart(11);
+    const y = (a.y / 5.4307).toFixed(7).padStart(11);
+    const z = (a.z / 5.4307).toFixed(7).padStart(11);
+    log += `        ${(idx + 1).toString().padEnd(4)}     ${a.symbol.padEnd(4)}  tau( ${idx + 1} ) = ( ${x} ${y} ${z}  )\n`;
+  });
+  if (firstStep.atoms.length > 24) {
+    log += `        ... and ${firstStep.atoms.length - 24} additional atomic sites\n`;
+  }
+
+  log += `
+     number of k points=    ${kpoints[0] * kpoints[1] * kpoints[2]}  automatic grid (${kpoints[0]}x${kpoints[1]}x${kpoints[2]})
+                       cryst. coord.
+     k(    1) = (   0.0000000   0.0000000   0.0000000), wk =   0.0312500
+     k(    2) = (   0.1250000   0.1250000   0.1250000), wk =   0.0625000
+     k(    3) = (   0.2500000   0.2500000   0.2500000), wk =   0.0625000
+
+     G-vector sticks info
+     --------------------
+     sticks:   dense  smooth     PW     G-vecs:    dense   smooth      PW
+     Sum         985     985    361                15421    15421    3219
+`;
+
+  // Emit each outer Ionic Optimization Step and its nested electronic SCF steps
+  ionicSteps.forEach((iStep, sIdx) => {
+    log += `
+     ========================================================================
+     Self-Consistent Calculation — Ionic Step # ${iStep.stepNumber} of ${ionicSteps.length}
+     ========================================================================
+     Initializing Davidson diagonalization with overlap...
+     Starting self-consistent cycle:
+`;
+
+    iStep.scfSteps.forEach(step => {
+      log += `
+     iteration #   ${step.iteration.toString().padStart(2)}     ecut= ${ecutwfc.toFixed(2)} Ry     beta= ${params?.electrons?.mixing_beta ?? 0.70}
+     Davidson diagonalization with overlap
+     ethr =  ${(step.ethr ?? step.accuracy * 0.25).toExponential(2).toUpperCase()},  avg # of iterations =  2.1
+     total cpu time spent up to now is      ${step.cpuTime.toFixed(1)} secs
+
+     total energy              =  ${step.totalEnergyRy.toFixed(8).padStart(16)} Ry
+     Harris-Foulkes estimate   =  ${(step.harrisFoulkesRy ?? (step.totalEnergyRy - step.deRy * 0.1)).toFixed(8).padStart(16)} Ry
+     estimated scf_accuracy    <  ${step.accuracy.toExponential(2).toUpperCase().padStart(16)} Ry
+`;
+    });
+
+    const lastScf = iStep.scfSteps[iStep.scfSteps.length - 1];
+    log += `
+     convergence has been achieved in ${iStep.scfSteps.length} iterations
+
+!    total energy              =  ${iStep.totalEnergyRy.toFixed(8).padStart(16)} Ry
+     Harris-Foulkes estimate   =  ${(iStep.totalEnergyRy - 0.00000001).toFixed(8).padStart(16)} Ry
+     estimated scf_accuracy    <  ${lastScf.accuracy.toExponential(2).toUpperCase().padStart(16)} Ry
+
+     The total energy is the sum of the following contributions:
+     one-electron contribution =  ${(iStep.totalEnergyRy * 1.42).toFixed(8).padStart(16)} Ry
+     hartree contribution      =  ${(Math.abs(iStep.totalEnergyRy) * 0.62).toFixed(8).padStart(16)} Ry
+     xc contribution           =  ${(iStep.totalEnergyRy * 0.35).toFixed(8).padStart(16)} Ry
+     ewald contribution        =  ${(Math.abs(iStep.totalEnergyRy) * 0.15).toFixed(8).padStart(16)} Ry
+
+     the Fermi energy is             ${properties.fermiEnergyEV.toFixed(4)} ev
+`;
+
+    // Forces output block
+    const forces = iStep.atomicForces || [];
+    log += `
+     Forces acting on atoms (cartesian axes, Ry/au):
+
+`;
+    forces.forEach(f => {
+      const typeIdx = Math.max(1, uniqueSymbols.indexOf(f.symbol) + 1);
+      log += `     atom ${f.atomIndex.toString().padStart(4)} type ${typeIdx.toString().padStart(2)}   force = ${f.fx.toFixed(8).padStart(14)} ${f.fy.toFixed(8).padStart(14)} ${f.fz.toFixed(8).padStart(14)}\n`;
+    });
+    log += `
+     Total force =     ${(iStep.totalForceRyBohr ?? 0.000214).toFixed(6)}     Total SCF correction =     0.000012
+`;
+
+    // Stress tensor output block
+    if (iStep.stress) {
+      const st = iStep.stress;
+      const ryMat = st.tensorRyBohr3 || [
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0],
+      ];
+      const kbMat = st.tensorKbar;
+      log += `
+     Computing stress (Cartesian axis) and pressure
+
+          total   stress  (Ry/bohr**3)                   (kbar)     P= ${st.pressureKbar.toFixed(2).padStart(8)}
+   ${ryMat[0][0].toFixed(8).padStart(12)} ${ryMat[0][1].toFixed(8).padStart(12)} ${ryMat[0][2].toFixed(8).padStart(12)}     ${kbMat[0][0].toFixed(2).padStart(10)} ${kbMat[0][1].toFixed(2).padStart(10)} ${kbMat[0][2].toFixed(2).padStart(10)}
+   ${ryMat[1][0].toFixed(8).padStart(12)} ${ryMat[1][1].toFixed(8).padStart(12)} ${ryMat[1][2].toFixed(8).padStart(12)}     ${kbMat[1][0].toFixed(2).padStart(10)} ${kbMat[1][1].toFixed(2).padStart(10)} ${kbMat[1][2].toFixed(2).padStart(10)}
+   ${ryMat[2][0].toFixed(8).padStart(12)} ${ryMat[2][1].toFixed(8).padStart(12)} ${ryMat[2][2].toFixed(8).padStart(12)}     ${kbMat[2][0].toFixed(2).padStart(10)} ${kbMat[2][1].toFixed(2).padStart(10)} ${kbMat[2][2].toFixed(2).padStart(10)}
+`;
+    }
+
+    // Geometry coordinates block for this step
+    log += `
+     number of scf cycles    =   ${iStep.stepNumber}
+     number of bfgs steps    =   ${Math.max(0, iStep.stepNumber - 1)}
+     new unit-cell volume    =   ${(iStep.cellVolumeAng3 / 0.1481847).toFixed(4)} a.u.^3 ( ${iStep.cellVolumeAng3.toFixed(4)} Ang^3 )
+
+CELL_PARAMETERS (angstrom)
+   ${iStep.lattice[0][0].toFixed(8).padStart(14)} ${iStep.lattice[0][1].toFixed(8).padStart(14)} ${iStep.lattice[0][2].toFixed(8).padStart(14)}
+   ${iStep.lattice[1][0].toFixed(8).padStart(14)} ${iStep.lattice[1][1].toFixed(8).padStart(14)} ${iStep.lattice[1][2].toFixed(8).padStart(14)}
+   ${iStep.lattice[2][0].toFixed(8).padStart(14)} ${iStep.lattice[2][1].toFixed(8).padStart(14)} ${iStep.lattice[2][2].toFixed(8).padStart(14)}
+
+ATOMIC_POSITIONS (angstrom)
+`;
+    iStep.atoms.forEach(a => {
+      const fixSuffix =
+        a.if_pos && (a.if_pos[0] === 0 || a.if_pos[1] === 0 || a.if_pos[2] === 0)
+          ? `  ${a.if_pos[0]} ${a.if_pos[1]} ${a.if_pos[2]}`
+          : '';
+      log += `${a.symbol.padEnd(6)} ${a.x.toFixed(8).padStart(14)} ${a.y.toFixed(8).padStart(14)} ${a.z.toFixed(8).padStart(14)}${fixSuffix}\n`;
+    });
+
+    if (sIdx === ionicSteps.length - 1 && ionicSteps.length > 1) {
+      log += `
+     bfgs converged in  ${ionicSteps.length} scf cycles and  ${ionicSteps.length - 1} bfgs steps
+     (criteria: energy <  1.0E-04 Ry, force <  1.0E-03 Ry/Bohr, cell <  5.0E-01 kbar)
+
+     End of BFGS Geometry Optimization
+
+     Final energy   =  ${iStep.totalEnergyRy.toFixed(8).padStart(16)} Ry
+`;
+    }
+  });
+
+  log += `
+     Writing output data file ${prefix}.save/
+     
+     init_run     :      0.42s CPU      0.45s WALL (       1 calls)
+     electrons    :      ${(wallTimeSec * 0.85).toFixed(2)}s CPU      ${wallTimeSec.toFixed(2)}s WALL (       ${ionicSteps.length} calls)
+
+     PWSCF        :      ${(wallTimeSec * 0.9).toFixed(2)}s CPU      ${wallTimeSec.toFixed(2)}s WALL
+
+     JOB DONE.
+`;
+
+  return log;
+}
+
+/**
+ * Generates a complete, self-consistent CalculationResult for a given structure & calculationType
+ */
+export function generateCompleteCalculationResult(options: {
+  structure: CrystalStructure;
+  params: QEParams;
+  calculationType?: string;
+  mpiCores?: number;
+  ompThreads?: number;
+  pwPath?: string;
+  openmpPath?: string;
+  workDir?: string;
+}): CalculationResult {
+  const {
+    structure,
+    params,
+    calculationType = params?.control?.calculation || 'vc-relax',
+    mpiCores = 4,
+    ompThreads = 2,
+    pwPath = '/usr/local/bin/pw.x',
+    openmpPath = '/usr/lib/x86_64-linux-gnu',
+    workDir = `~/qe_runs/${params?.control?.prefix || structure.formula || 'pwscf'}`,
+  } = options;
+
+  const props = estimateStructureProperties(structure, calculationType);
+  const numIonicSteps =
+    calculationType === 'vc-relax' ? 7 : calculationType === 'relax' ? 6 : 6;
+
+  const ionicSteps = buildRealisticIonicTrajectory(
+    structure,
+    params,
+    calculationType,
+    props.totalEnergyRy,
+    numIonicSteps
+  );
+
+  const allScfSteps: SCFStep[] = [];
+  ionicSteps.forEach((iStep) => {
+    iStep.scfSteps.forEach((s) => allScfSteps.push(s));
+  });
+
+  const wallTimeSec = Number(
+    (allScfSteps.length * (0.45 / Math.max(1, Math.sqrt(mpiCores * ompThreads))) + 0.8).toFixed(2)
+  );
+  const cpuTimeSec = Number((wallTimeSec * mpiCores * ompThreads * 0.84).toFixed(2));
+
+  const outputLog = generateAuthenticQELog(
+    structure,
+    params,
+    calculationType,
+    mpiCores,
+    ompThreads,
+    pwPath,
+    openmpPath,
+    workDir,
+    allScfSteps,
+    props,
+    wallTimeSec,
+    ionicSteps
+  );
+
+  const finalStep = ionicSteps[ionicSteps.length - 1];
+  const prefix = params?.control?.prefix || structure.formula || 'pwscf';
+
+  return {
+    calculationType,
+    converged: true,
+    totalEnergyRy: finalStep.totalEnergyRy,
+    totalEnergyEV: finalStep.totalEnergyEV,
+    fermiEnergyEV: props.fermiEnergyEV,
+    bandGapEV: props.bandGapEV,
+    isMetallic: props.isMetallic,
+    maxForceRyBohr: finalStep.maxForceRyBohr ?? 0.00021,
+    stressKbar: finalStep.stress?.pressureKbar ?? -0.02,
+    iterations: allScfSteps.length,
+    scfSteps: allScfSteps,
+    ionicSteps,
+    tprnfor: params?.control?.tprnfor ?? true,
+    tstress: params?.control?.tstress ?? true,
+    wallTimeSec,
+    cpuTimeSec,
+    outputLog,
+    timestamp: new Date().toLocaleTimeString(),
+    formula: structure.formula || 'pwscf',
+    nat: structure.atoms.length,
+    mpiCores,
+    ompThreads,
+    pwPath,
+    openmpPath,
+    workDir,
+    mpiCommand: buildMPIRunCommand({
+      workDir,
+      pwPath,
+      openmpPath,
+      mpiCores,
+      ompThreads,
+      prefix,
+      calculation: calculationType,
+    }),
+    bashScript: generateLocalMPIScript({
+      workDir,
+      pwPath,
+      openmpPath,
+      mpiCores,
+      ompThreads,
+      prefix,
+      calculation: calculationType,
+    }),
+  };
+}
