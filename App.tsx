@@ -774,9 +774,9 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen w-full bg-primary-dark text-slate-900 font-sans overflow-hidden">
+    <div className="flex flex-col h-screen h-[100dvh] w-full bg-primary-dark text-slate-900 font-sans overflow-hidden">
       {/* Top Header - Spans full width */}
-      <header className="h-14 md:h-16 flex-none border-b border-slate-200/80 bg-white flex items-center justify-between px-3 md:px-0 z-20 shadow-sm">
+      <header className="h-14 md:h-16 flex-none border-b border-slate-200/80 bg-white flex items-center justify-between px-2.5 sm:px-3 md:px-0 z-20 shadow-sm">
         {/* Desktop Brand Section - Aligned with Settings Panel width when open */}
         <div className={`hidden md:flex items-center gap-3 px-4 h-full border-r border-slate-200 transition-all duration-300 ${isLeftPanelOpen ? 'w-56 lg:w-64 xl:w-72 2xl:w-80 flex-shrink-0' : 'w-auto'}`}>
           <div className="w-8 h-8 md:w-9 md:h-9 bg-teal-600 rounded-lg flex items-center justify-center text-white font-bold text-lg md:text-xl shadow-md shadow-teal-600/20 shrink-0">S</div>
@@ -789,15 +789,15 @@ const App: React.FC = () => {
         </div>
 
         {/* Mobile Brand Section */}
-        <div className="flex md:hidden items-center gap-2">
-          <div className="w-8 h-8 bg-teal-600 rounded-lg flex items-center justify-center text-white font-bold text-base shadow-md shadow-teal-600/20">S</div>
-          <span className="font-extrabold text-base tracking-tight text-slate-900">Seal</span>
+        <div className="flex md:hidden items-center gap-1.5 shrink-0">
+          <div className="w-7 h-7 sm:w-8 sm:h-8 bg-teal-600 rounded-lg flex items-center justify-center text-white font-bold text-sm sm:text-base shadow-md shadow-teal-600/20">S</div>
+          <span className="font-extrabold text-sm sm:text-base tracking-tight text-slate-900">Seal</span>
         </div>
 
         {/* Header Controls & Actions - Uniform height, grouped alignment & enhanced Menu button */}
-        <div className="flex-1 flex items-center justify-end gap-2 md:gap-3 px-2 md:px-6 overflow-x-auto custom-scrollbar">
-          {/* Group 1: Left Panel Controls (Model & Settings) */}
-          <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex-1 flex items-center justify-end gap-1.5 sm:gap-2 md:gap-3 pl-2 pr-0.5 md:px-6 overflow-x-auto custom-scrollbar">
+          {/* Group 1: Left Panel Controls (Model & Settings) - Desktop only since Mobile has bottom navigation bar */}
+          <div className="hidden md:flex items-center gap-1.5 shrink-0">
             {/* Toggle Model Panel Button */}
             <button
               onClick={() => {
@@ -849,15 +849,15 @@ const App: React.FC = () => {
             </button>
           </div>
 
-          <div className="h-5 w-px bg-slate-200 hidden sm:block shrink-0" />
+          <div className="h-5 w-px bg-slate-200 hidden md:block shrink-0" />
 
           {/* Group 2: Structure Source (Presets & File Import) */}
           <div className="flex items-center gap-1.5 shrink-0">
             {/* Preset Selector Dropdown */}
-            <div className="h-9 flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200/80 px-2.5 rounded-lg border border-slate-200 transition-colors">
+            <div className="h-8 sm:h-9 flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200/80 px-2 sm:px-2.5 rounded-lg border border-slate-200 transition-colors">
               <Box size={14} className="text-teal-600 shrink-0" />
               <select 
-                className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer pr-1 max-w-[110px] sm:max-w-none"
+                className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer pr-1 max-w-[105px] xs:max-w-[130px] sm:max-w-none"
                 onChange={(e) => loadPresetStructure(e.target.value)}
                 defaultValue="si"
               >
@@ -868,7 +868,7 @@ const App: React.FC = () => {
             </div>
 
             {/* Import Structure Button */}
-            <label className={`h-9 cursor-pointer flex items-center justify-center gap-1.5 px-3 rounded-lg font-semibold text-xs transition-all shadow-xs shrink-0 ${
+            <label className={`h-8 sm:h-9 cursor-pointer flex items-center justify-center gap-1.5 px-2.5 sm:px-3 rounded-lg font-semibold text-xs transition-all shadow-xs shrink-0 ${
               isLoading ? 'bg-slate-200 cursor-not-allowed text-slate-400' : 'bg-teal-600 hover:bg-teal-700 text-white shadow-teal-600/20 active:scale-95'
             }`}>
               {isLoading ? <Loader2 className="animate-spin" size={14} /> : <FileUp size={14} />}
@@ -888,7 +888,7 @@ const App: React.FC = () => {
 
           {/* Group 3: Input Files, Run, Results & Save Buttons */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Direct Input Files Toggle Button */}
+            {/* Direct Input Files Toggle Button (Desktop only - Mobile uses bottom bar) */}
             <button
               onClick={() => {
                 if (window.innerWidth < 768) {
@@ -903,7 +903,7 @@ const App: React.FC = () => {
                   }
                 }
               }}
-              className={`h-9 flex items-center gap-1.5 px-3 rounded-lg text-xs font-semibold transition-all border ${
+              className={`h-9 hidden md:flex items-center gap-1.5 px-3 rounded-lg text-xs font-semibold transition-all border ${
                 (isRightPanelOpen && activeRightView === 'input' && window.innerWidth >= 768) || (activeMobileDrawer === 'input' && activeRightView === 'input' && window.innerWidth < 768)
                   ? 'bg-teal-50 border-teal-500/50 text-teal-700 shadow-xs ring-1 ring-teal-500/20'
                   : 'bg-slate-100 hover:bg-slate-200/80 border-slate-200 text-slate-700'
@@ -982,7 +982,7 @@ const App: React.FC = () => {
             {/* Quick Save Button */}
             <button
               onClick={handleSave}
-              className="h-9 flex items-center gap-1.5 px-3 rounded-lg text-xs font-semibold transition-all border bg-slate-100 hover:bg-slate-200/80 border-slate-200 text-slate-700"
+              className="h-8 sm:h-9 flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-semibold transition-all border bg-slate-100 hover:bg-slate-200/80 border-slate-200 text-slate-700"
               title={savedDirectoryName ? `Quick Save to ${savedDirectoryName} (Ctrl+S)` : 'Save Project Folder to PC (Ctrl+S)'}
             >
               <Save size={14} className="text-teal-600 shrink-0" />
@@ -1036,37 +1036,41 @@ const App: React.FC = () => {
         </div>
 
         {/* Desktop Right Output & Execution Sidebar */}
-        <RightPanel
-          isOpen={isRightPanelOpen}
-          onClose={() => setIsRightPanelOpen(false)}
-          activeView={activeRightView}
-          onViewChange={setActiveRightView}
-          activeInputTab={activeInputTab}
-          onActiveInputTabChange={setActiveInputTab}
-          structure={structure}
-          params={params}
-          onParamsChange={setParams}
-          pwOutput={pwOutput}
-          ppOutput={ppOutput}
-          phOutput={phOutput}
-          onDownloadInput={handleDownloadInput}
-          onCopyText={copyToClipboard}
-          copiedSection={copiedSection}
-          calculationResult={calculationResult}
-          onCalculationComplete={(res) => setCalculationResult(res)}
-          onTrajectoryFramePreview={setTrajectoryPreviewStructure}
-          onApplyStructureToEditor={handleStructureChange}
-          savedDirectoryName={savedDirectoryName}
-          savedDirectoryHandle={savedDirectoryHandle}
-          onDirectoryHandleChange={(handle, name) => {
-            setSavedDirectoryHandle(handle);
-            setSavedDirectoryName(name);
-            if (handle) storeHandle('projectDirHandle', handle);
-            if (name) storeHandle('projectFolderName', name);
-          }}
-          onSaveAs={handleSaveAs}
-          onSave={handleSave}
-        />
+        {isRightPanelOpen && (
+          <div className="hidden md:flex flex-shrink-0 z-20 h-full">
+            <RightPanel
+              isOpen={isRightPanelOpen}
+              onClose={() => setIsRightPanelOpen(false)}
+              activeView={activeRightView}
+              onViewChange={setActiveRightView}
+              activeInputTab={activeInputTab}
+              onActiveInputTabChange={setActiveInputTab}
+              structure={structure}
+              params={params}
+              onParamsChange={setParams}
+              pwOutput={pwOutput}
+              ppOutput={ppOutput}
+              phOutput={phOutput}
+              onDownloadInput={handleDownloadInput}
+              onCopyText={copyToClipboard}
+              copiedSection={copiedSection}
+              calculationResult={calculationResult}
+              onCalculationComplete={(res) => setCalculationResult(res)}
+              onTrajectoryFramePreview={setTrajectoryPreviewStructure}
+              onApplyStructureToEditor={handleStructureChange}
+              savedDirectoryName={savedDirectoryName}
+              savedDirectoryHandle={savedDirectoryHandle}
+              onDirectoryHandleChange={(handle, name) => {
+                setSavedDirectoryHandle(handle);
+                setSavedDirectoryName(name);
+                if (handle) storeHandle('projectDirHandle', handle);
+                if (name) storeHandle('projectFolderName', name);
+              }}
+              onSaveAs={handleSaveAs}
+              onSave={handleSave}
+            />
+          </div>
+        )}
       </div>
 
       {/* Floating Save Notification Toast */}
@@ -1091,35 +1095,35 @@ const App: React.FC = () => {
       )}
 
       {/* Mobile Navigation Bottom Bar */}
-      <div className="md:hidden flex items-center justify-around bg-white border-t border-slate-200 py-1.5 px-3 z-30 shadow-lg flex-shrink-0">
+      <div className="md:hidden grid grid-cols-6 gap-0.5 bg-white border-t border-slate-200 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] px-1.5 z-30 shadow-lg flex-shrink-0">
         <button
           onClick={() => setActiveMobileDrawer(null)}
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-bold px-3 py-1 rounded-lg transition-colors ${
+          className={`flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold py-1 rounded-lg transition-colors ${
             activeMobileDrawer === null ? 'text-teal-600 bg-teal-50' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Eye size={18} />
-          <span>3D View</span>
+          <Eye size={17} />
+          <span className="truncate">3D View</span>
         </button>
 
         <button
           onClick={() => setActiveMobileDrawer(activeMobileDrawer === 'model' ? null : 'model')}
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-bold px-3 py-1 rounded-lg transition-colors ${
+          className={`flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold py-1 rounded-lg transition-colors ${
             activeMobileDrawer === 'model' ? 'text-teal-600 bg-teal-50' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Compass size={18} />
-          <span>Model</span>
+          <Compass size={17} />
+          <span className="truncate">Model</span>
         </button>
 
         <button
           onClick={() => setActiveMobileDrawer(activeMobileDrawer === 'settings' ? null : 'settings')}
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-bold px-3 py-1 rounded-lg transition-colors ${
+          className={`flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold py-1 rounded-lg transition-colors ${
             activeMobileDrawer === 'settings' ? 'text-teal-600 bg-teal-50' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <SlidersHorizontal size={18} />
-          <span>Config</span>
+          <SlidersHorizontal size={17} />
+          <span className="truncate">Config</span>
         </button>
 
         <button
@@ -1131,12 +1135,12 @@ const App: React.FC = () => {
               setActiveRightView('input');
             }
           }}
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-bold px-3 py-1 rounded-lg transition-colors ${
+          className={`flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold py-1 rounded-lg transition-colors ${
             activeMobileDrawer === 'input' && activeRightView === 'input' ? 'text-teal-600 bg-teal-50' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <FileCode size={18} />
-          <span>Input</span>
+          <FileCode size={17} />
+          <span className="truncate">Input</span>
         </button>
 
         <button
@@ -1148,12 +1152,12 @@ const App: React.FC = () => {
               setActiveRightView('run');
             }
           }}
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-bold px-3 py-1 rounded-lg transition-colors ${
+          className={`flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold py-1 rounded-lg transition-colors ${
             activeMobileDrawer === 'input' && activeRightView === 'run' ? 'text-teal-600 bg-teal-50' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Play size={18} />
-          <span>Run</span>
+          <Play size={17} />
+          <span className="truncate">Run</span>
         </button>
 
         <button
@@ -1165,12 +1169,12 @@ const App: React.FC = () => {
               setActiveRightView('results');
             }
           }}
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-bold px-3 py-1 rounded-lg transition-colors ${
+          className={`flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold py-1 rounded-lg transition-colors ${
             activeMobileDrawer === 'input' && activeRightView === 'results' ? 'text-teal-600 bg-teal-50' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <BarChart3 size={18} />
-          <span>Results</span>
+          <BarChart3 size={17} />
+          <span className="truncate">Results</span>
         </button>
       </div>
 

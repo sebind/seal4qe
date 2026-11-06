@@ -1149,9 +1149,9 @@ const StructureViewer: React.FC<StructureViewerProps> = ({ structure, params, on
           </div>
 
           {/* Right Side: Toolbar tools strictly bounded within the visualization panel */}
-          <div className="max-w-full ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5 text-xs">
+          <div className="max-w-full ml-auto flex flex-nowrap md:flex-wrap items-center justify-start md:justify-end gap-x-1.5 sm:gap-x-2 gap-y-1.5 text-xs overflow-x-auto custom-scrollbar py-0.5">
             {/* 1. Camera Views / Orientations */}
-            <div className={`h-8 flex items-center p-0.5 rounded-lg border ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+            <div className={`h-8 flex items-center p-0.5 rounded-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
               {(['3d', 'a', 'b', 'c'] as const).map((axis) => (
                 <button
                   key={axis}
@@ -1169,7 +1169,7 @@ const StructureViewer: React.FC<StructureViewerProps> = ({ structure, params, on
             </div>
 
             {/* 2. Display Modes */}
-            <div className={`h-8 flex items-center p-0.5 rounded-lg border ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+            <div className={`h-8 flex items-center p-0.5 rounded-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
               <button 
                 onClick={() => setViewMode('ball-stick')} 
                 className={`w-7 h-7 rounded-md flex items-center justify-center transition-all ${viewMode === 'ball-stick' ? 'bg-teal-600 text-white shadow-xs font-bold' : isDarkMode ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-900'}`} 
@@ -1194,7 +1194,7 @@ const StructureViewer: React.FC<StructureViewerProps> = ({ structure, params, on
             </div>
 
             {/* 3. Overlays Toggle Group */}
-            <div className={`h-8 flex items-center p-0.5 rounded-lg border ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+            <div className={`h-8 flex items-center p-0.5 rounded-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
               <button 
                 onClick={() => setShowLattice(!showLattice)} 
                 disabled={!structure} 
@@ -1231,7 +1231,7 @@ const StructureViewer: React.FC<StructureViewerProps> = ({ structure, params, on
             {/* 4. Projection Mode */}
             <button
               onClick={() => setIsOrthographic(!isOrthographic)}
-              className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg border text-[11px] font-semibold transition-all ${
+              className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg border text-[11px] font-semibold transition-all shrink-0 ${
                 isOrthographic 
                   ? (isDarkMode ? 'bg-slate-800 text-teal-400 border-slate-700' : 'bg-slate-100 text-slate-800 border-slate-300') 
                   : (isDarkMode ? 'border-slate-700 text-slate-400 hover:text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-100')
@@ -1243,7 +1243,7 @@ const StructureViewer: React.FC<StructureViewerProps> = ({ structure, params, on
             </button>
 
             {/* 5. Zoom, Pan & Recenter */}
-            <div className={`h-8 flex items-center p-0.5 rounded-lg border ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+            <div className={`h-8 flex items-center p-0.5 rounded-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
               <button 
                 onClick={() => zoomStructure(1.2)} 
                 className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-600 hover:text-slate-900'}`} 
@@ -1261,28 +1261,28 @@ const StructureViewer: React.FC<StructureViewerProps> = ({ structure, params, on
               <div className={`h-3.5 w-px mx-0.5 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-300'}`} />
               <button 
                 onClick={() => panStructure('left')} 
-                className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-600 hover:text-slate-900'}`} 
+                className={`w-7 h-7 rounded-md hidden sm:flex items-center justify-center transition-colors ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-600 hover:text-slate-900'}`} 
                 title="Pan Left"
               >
                 <ArrowLeft size={12} />
               </button>
               <button 
                 onClick={() => panStructure('up')} 
-                className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-600 hover:text-slate-900'}`} 
+                className={`w-7 h-7 rounded-md hidden sm:flex items-center justify-center transition-colors ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-600 hover:text-slate-900'}`} 
                 title="Pan Up"
               >
                 <ArrowUp size={12} />
               </button>
               <button 
                 onClick={() => panStructure('down')} 
-                className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-600 hover:text-slate-900'}`} 
+                className={`w-7 h-7 rounded-md hidden sm:flex items-center justify-center transition-colors ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-600 hover:text-slate-900'}`} 
                 title="Pan Down"
               >
                 <ArrowDown size={12} />
               </button>
               <button 
                 onClick={() => panStructure('right')} 
-                className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-600 hover:text-slate-900'}`} 
+                className={`w-7 h-7 rounded-md hidden sm:flex items-center justify-center transition-colors ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-600 hover:text-slate-900'}`} 
                 title="Pan Right"
               >
                 <ArrowRight size={12} />
@@ -1297,7 +1297,7 @@ const StructureViewer: React.FC<StructureViewerProps> = ({ structure, params, on
             </div>
 
             {/* 6. Bond Cutoff Slider */}
-            <div className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg border ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+            <div className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
               <Sliders size={12} className="text-slate-400 shrink-0" />
               <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">Bonds:</span>
               <input 
@@ -1314,7 +1314,7 @@ const StructureViewer: React.FC<StructureViewerProps> = ({ structure, params, on
             </div>
 
             {/* 7. Styling, Theme & Actions */}
-            <div className="h-8 flex items-center gap-1">
+            <div className="h-8 flex items-center gap-1 shrink-0">
               {/* Element Style & Radius Editor Toggle */}
               <button
                 onClick={() => {

@@ -1363,7 +1363,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
         {/* ======================================================== */}
         {/* VIEW 3: RESULTS DASHBOARD                                */}
         {/* ======================================================== */}
-        {activeView === 'results' && (
+        <div className={activeView === 'results' ? 'flex-1 flex flex-col min-h-0' : 'hidden'}>
           <ResultsDashboard
             structure={structure}
             params={params}
@@ -1384,7 +1384,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
             isFullWidth={isFullWidthResults}
             onToggleFullWidth={() => setIsFullWidthResults((v) => !v)}
           />
-        )}
+        </div>
       </div>
 
       {/* Local Executable MPI Bash Script Modal */}

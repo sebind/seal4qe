@@ -49,6 +49,14 @@ interface ResultsDashboardProps {
 
 type GraphToggleMode = 'scf' | 'relax' | 'trj' | 'band' | 'dos';
 
+// Persist Results tab state across mobile drawer open/close and view switches
+let cachedFolderFiles: LocalOutFileEntry[] = [];
+let cachedSelectedFilePath = '';
+let cachedLocalFolderName: string | null = null;
+let cachedActiveToggle: GraphToggleMode | null = 'scf';
+let cachedFrameIndex = 0;
+let cachedLastSyncedFilePath = '';
+
 export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({
   structure,
   params,
@@ -64,16 +72,35 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({
   savedDirectoryHandle,
   onDirectoryHandleChange,
 }) => {
-  const [activeToggle, setActiveToggle] = useState<GraphToggleMode | null>('scf');
-  const [folderFiles, setFolderFiles] = useState<LocalOutFileEntry[]>([]);
-  const [selectedFilePath, setSelectedFilePath] = useState<string>('');
-  const [localFolderName, setLocalFolderName] = useState<string | null>(savedDirectoryName || null);
+  const [activeToggle, setActiveToggle] = useState<GraphToggleMode | null>(cachedActiveToggle);
+  const [folderFiles, setFolderFiles] = useState<LocalOutFileEntry[]>(cachedFolderFiles);
+  const [selectedFilePath, setSelectedFilePath] = useState<string>(cachedSelectedFilePath);
+  const [localFolderName, setLocalFolderName] = useState<string | null>(
+    cachedLocalFolderName || savedDirectoryName || null
+  );
   const [isScanningFolder, setIsScanningFolder] = useState<boolean>(false);
   const [hoveredPoint, setHoveredPoint] = useState<{ label: string; value: string } | null>(null);
 
   // Trajectory Movie playback state
-  const [currentFrameIndex, setCurrentFrameIndex] = useState<number>(0);
+  const [currentFrameIndex, setCurrentFrameIndex] = useState<number>(cachedFrameIndex);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+
+  // Sync state back to module cache for seamless mobile drawer persistence
+  useEffect(() => {
+    cachedFolderFiles = folderFiles;
+  }, [folderFiles]);
+  useEffect(() => {
+    cachedSelectedFilePath = selectedFilePath;
+  }, [selectedFilePath]);
+  useEffect(() => {
+    cachedLocalFolderName = localFolderName;
+  }, [localFolderName]);
+  useEffect(() => {
+    cachedActiveToggle = activeToggle;
+  }, [activeToggle]);
+  useEffect(() => {
+    cachedFrameIndex = currentFrameIndex;
+  }, [currentFrameIndex]);
 
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -386,10 +413,16 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({
   // Keep trajectory frame index in bounds, and default to the final frame when a new .out file is opened
   const totalFrames = relaxSteps.length;
   useEffect(() => {
-    if (totalFrames > 0) {
-      setCurrentFrameIndex(totalFrames - 1);
-    } else {
-      setCurrentFrameIndex(0);
+    const currentPath = activeFileEntry?.path || '';
+    if (currentPath !== cachedLastSyncedFilePath) {
+      cachedLastSyncedFilePath = currentPath;
+      if (totalFrames > 0) {
+        setCurrentFrameIndex(totalFrames - 1);
+      } else {
+        setCurrentFrameIndex(0);
+      }
+    } else if (currentFrameIndex >= totalFrames) {
+      setCurrentFrameIndex(Math.max(0, totalFrames - 1));
     }
   }, [activeFileEntry?.path, totalFrames]);
 
@@ -620,7 +653,7 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({
       const isBandOrDosMissing = activeToggle === 'band' || activeToggle === 'dos';
       return (
         <div
-          className="w-full aspect-square bg-white border border-slate-300 rounded-lg flex flex-col items-center justify-center p-6 text-center"
+          className="w-full max-w-[400px] mx-auto aspect-square bg-white border border-slate-300 rounded-lg flex flex-col items-center justify-center p-6 text-center"
           style={fontStyle}
         >
           {isBandOrDosMissing ? (
@@ -686,7 +719,7 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({
     const legendY = padT + 8;
 
     return (
-      <div className="w-full aspect-square bg-white border border-slate-300 rounded-lg p-2 shadow-2xs">
+      <div className="w-full max-w-[400px] mx-auto aspect-square bg-white border border-slate-300 rounded-lg p-2 shadow-2xs">
         <svg
           viewBox={`0 0 ${SIZE} ${SIZE}`}
           className="w-full h-full select-none"
