@@ -11,10 +11,10 @@ function githubPagesRootPlugin(): Plugin {
       handler(html, ctx) {
         if (ctx.server) {
           // In `vite dev`, load directly from TypeScript source entry
-          return html.replace('./assets/app.js', '/index.tsx');
+          return html.replace(/\.\/assets\/app\.js(\?[^"']*)?/, '/index.tsx');
         }
         // During `vite build`, transform ./assets/app.js back to ./index.tsx so Rollup bundles index.tsx
-        return html.replace('./assets/app.js', './index.tsx');
+        return html.replace(/\.\/assets\/app\.js(\?[^"']*)?/, './index.tsx');
       }
     },
     closeBundle() {
