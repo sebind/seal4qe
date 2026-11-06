@@ -92,6 +92,96 @@ export async function getWritePermission(handle: any): Promise<boolean> {
   return false;
 }
 
+/**
+ * Verify or actively request read permission for a directory handle.
+ */
+export async function getReadPermission(handle: any): Promise<boolean> {
+  if (!handle) return false;
+  try {
+    const opts = { mode: 'read' as const };
+    if (typeof handle.queryPermission === 'function') {
+      const q = await handle.queryPermission(opts);
+      if (q === 'granted') return true;
+    }
+    if (typeof handle.requestPermission === 'function') {
+      const r = await handle.requestPermission(opts);
+      return r === 'granted';
+    }
+    return true;
+  } catch (err) {
+    console.warn('getReadPermission failed:', err);
+  }
+  return false;
+}
+
+export interface LocalOutFileEntry {
+  name: string;
+  path: string;
+  content: string;
+  lastModified: number;
+}
+
+/**
+ * Scan a local directory handle (and 1st-level subdirectories) for Quantum ESPRESSO .out files
+ * (as well as .dos / .dat / .gnu output files if present).
+ */
+export async function readOutFilesFromDirectory(dirHandle: any): Promise<LocalOutFileEntry[]> {
+  if (!dirHandle) return [];
+  const hasPerm = await getReadPermission(dirHandle);
+  if (!hasPerm) return [];
+
+  const results: LocalOutFileEntry[] = [];
+
+  const scanDir = async (handle: any, prefixPath: string, depth: number) => {
+    try {
+      for await (const entry of handle.values()) {
+        if (entry.kind === 'file') {
+          const lower = entry.name.toLowerCase();
+          if (
+            lower.endsWith('.out') ||
+            lower.endsWith('.log') ||
+            lower.endsWith('.dos') ||
+            lower.endsWith('.gnu') ||
+            lower.endsWith('.bands') ||
+            lower.endsWith('.dat')
+          ) {
+            try {
+              const file = await entry.getFile();
+              if (file.size <= 25 * 1024 * 1024) {
+                const content = await file.text();
+                results.push({
+                  name: entry.name,
+                  path: prefixPath ? `${prefixPath}/${entry.name}` : entry.name,
+                  content,
+                  lastModified: file.lastModified || 0,
+                });
+              }
+            } catch (readErr) {
+              console.warn(`Could not read file ${entry.name}:`, readErr);
+            }
+          }
+        } else if (entry.kind === 'directory' && depth < 1 && !entry.name.startsWith('.') && !entry.name.endsWith('.save') && entry.name !== 'pseudo') {
+          await scanDir(entry, prefixPath ? `${prefixPath}/${entry.name}` : entry.name, depth + 1);
+        }
+      }
+    } catch (err) {
+      console.warn('Error scanning directory:', err);
+    }
+  };
+
+  await scanDir(dirHandle, '', 0);
+
+  // Sort .out files first, then by lastModified descending
+  results.sort((a, b) => {
+    const aIsOut = a.name.toLowerCase().endsWith('.out') ? 1 : 0;
+    const bIsOut = b.name.toLowerCase().endsWith('.out') ? 1 : 0;
+    if (aIsOut !== bIsOut) return bIsOut - aIsOut;
+    return b.lastModified - a.lastModified || a.name.localeCompare(b.name);
+  });
+
+  return results;
+}
+
 export interface SaveProjectFilesOptions {
   parentDirHandle?: any;
   projectDirHandle: any;

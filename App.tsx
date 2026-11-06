@@ -311,9 +311,6 @@ const App: React.FC = () => {
             }
         });
 
-        // Determine if prefix should be updated (if it was the previous formula or default)
-        const currentPrefix = prev.control?.prefix || 'pwscf';
-        const shouldUpdatePrefix = currentPrefix === oldFormula || currentPrefix === 'pwscf';
         const nextIbrav = prev.system?.ibrav ?? 0;
         
         return {
@@ -321,11 +318,13 @@ const App: React.FC = () => {
             atomic_species: nextSpecies,
             control: {
                 ...(prev.control || {}),
-                prefix: shouldUpdatePrefix ? newFormula : currentPrefix
+                prefix: newFormula
             } as any,
             system: {
                 ...(prev.system || {}),
                 ibrav: nextIbrav,
+                nat: newAtoms.length,
+                ntyp: activeSymbols.length,
                 a: detected.a,
                 b: detected.b,
                 c: detected.c,
@@ -431,13 +430,7 @@ const App: React.FC = () => {
         atomic_species: newSpecies,
         lattice_entry_mode: latticeMode
       }));
-      setCalculationResult(
-        generateCompleteCalculationResult({
-          structure: parsedStructure,
-          params: DEFAULT_QE_PARAMS,
-          calculationType: 'vc-relax',
-        })
-      );
+      setCalculationResult(null);
 
     } catch (err: any) {
       console.error(err);
@@ -508,13 +501,7 @@ const App: React.FC = () => {
       atomic_species: newSpecies,
       lattice_entry_mode: 'abc'
     }));
-    setCalculationResult(
-      generateCompleteCalculationResult({
-        structure: newStruct,
-        params: DEFAULT_QE_PARAMS,
-        calculationType: 'vc-relax',
-      })
-    );
+    setCalculationResult(null);
   };
 
   const copyToClipboard = (text: string, section: string) => {
@@ -1070,6 +1057,13 @@ const App: React.FC = () => {
           onTrajectoryFramePreview={setTrajectoryPreviewStructure}
           onApplyStructureToEditor={handleStructureChange}
           savedDirectoryName={savedDirectoryName}
+          savedDirectoryHandle={savedDirectoryHandle}
+          onDirectoryHandleChange={(handle, name) => {
+            setSavedDirectoryHandle(handle);
+            setSavedDirectoryName(name);
+            if (handle) storeHandle('projectDirHandle', handle);
+            if (name) storeHandle('projectFolderName', name);
+          }}
           onSaveAs={handleSaveAs}
           onSave={handleSave}
         />
@@ -1259,6 +1253,13 @@ const App: React.FC = () => {
               onTrajectoryFramePreview={setTrajectoryPreviewStructure}
               onApplyStructureToEditor={handleStructureChange}
               savedDirectoryName={savedDirectoryName}
+              savedDirectoryHandle={savedDirectoryHandle}
+              onDirectoryHandleChange={(handle, name) => {
+                setSavedDirectoryHandle(handle);
+                setSavedDirectoryName(name);
+                if (handle) storeHandle('projectDirHandle', handle);
+                if (name) storeHandle('projectFolderName', name);
+              }}
               onSaveAs={handleSaveAs}
               onSave={handleSave}
             />

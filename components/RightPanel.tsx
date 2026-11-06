@@ -42,6 +42,8 @@ interface RightPanelProps {
   onTrajectoryFramePreview?: (previewStructure: CrystalStructure | null) => void;
   onApplyStructureToEditor?: (newStructure: CrystalStructure) => void;
   savedDirectoryName?: string | null;
+  savedDirectoryHandle?: any;
+  onDirectoryHandleChange?: (handle: any, name: string) => void;
   onSaveAs?: () => void;
   onSave?: () => void;
   activeInputTab?: 'pw' | 'pp' | 'ph' | 'convergence';
@@ -67,6 +69,8 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onTrajectoryFramePreview,
   onApplyStructureToEditor,
   savedDirectoryName,
+  savedDirectoryHandle,
+  onDirectoryHandleChange,
   onSaveAs,
   onSave,
   activeInputTab: propActiveInputTab,
@@ -462,12 +466,8 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                   </span>
                 )}
                 {activeView === 'results' && (
-                  <span className={`font-mono px-1.5 py-0.2 rounded border ${
-                    calculationResult 
-                      ? 'text-teal-700 bg-teal-50 border-teal-200/50' 
-                      : 'text-slate-500 bg-slate-100 border-slate-200'
-                  }`}>
-                    {calculationResult ? 'Converged & Saved' : 'No run executed yet'}
+                  <span className="font-mono px-1.5 py-0.2 rounded border text-slate-600 bg-slate-100 border-slate-200 truncate">
+                    {savedDirectoryName || calculationResult?.timestamp || 'Local .out Extractor'}
                   </span>
                 )}
               </div>
@@ -1378,6 +1378,9 @@ export const RightPanel: React.FC<RightPanelProps> = ({
             workDir={workDir}
             mpiCores={mpiCores}
             ompThreads={ompThreads}
+            savedDirectoryName={savedDirectoryName}
+            savedDirectoryHandle={savedDirectoryHandle}
+            onDirectoryHandleChange={onDirectoryHandleChange}
             isFullWidth={isFullWidthResults}
             onToggleFullWidth={() => setIsFullWidthResults((v) => !v)}
           />

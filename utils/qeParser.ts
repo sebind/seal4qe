@@ -12,11 +12,32 @@ export const RY_TO_EV = 13.6056980659;
 export const BOHR_TO_ANGSTROM = 0.529177210903;
 export const RY_BOHR_TO_EV_ANG = RY_TO_EV / BOHR_TO_ANGSTROM; // ~25.711043 eV/Å
 
+export interface BandKPoint {
+  index: number;
+  coords: [number, number, number];
+  distance: number;
+  energiesEV: number[];
+}
+
+export interface ParsedBandStructure {
+  kPoints: BandKPoint[];
+  bands: { bandIndex: number; points: { kDistance: number; kIndex: number; energyEV: number }[] }[];
+  fermiEnergyEV?: number;
+}
+
+export interface DOSPoint {
+  energyEV: number;
+  dos: number;
+  integratedDos?: number;
+}
+
 export interface ParsedQELogData {
-  calculationType: 'scf' | 'relax' | 'vc-relax' | 'bands' | 'nscf' | 'md';
+  calculationType: 'scf' | 'relax' | 'vc-relax' | 'bands' | 'nscf' | 'md' | 'dos';
   converged: boolean;
   allScfSteps: SCFStep[];
   ionicSteps: IonicStep[];
+  bandStructure: ParsedBandStructure | null;
+  dosData: DOSPoint[];
   totalEnergyRy: number;
   totalEnergyEV: number;
   fermiEnergyEV: number;
@@ -31,6 +52,15 @@ export interface ParsedQELogData {
   nat: number;
   wallTimeSec: number;
   cpuTimeSec: number;
+  extractedStructure: CrystalStructure | null;
+  extractedParams?: {
+    ecutwfc?: number;
+    ecutrho?: number;
+    conv_thr?: number;
+    mixing_beta?: number;
+    ibrav?: number;
+    prefix?: string;
+  };
 }
 
 /**
@@ -351,24 +381,54 @@ export function parseQEOutputLog(
   const defaultAtoms: Atom[] =
     fallbackStructure?.atoms && fallbackStructure.atoms.length > 0
       ? fallbackStructure.atoms.map((a) => ({ ...a }))
-      : [
-          { symbol: 'Si', x: 0, y: 0, z: 0 },
-          { symbol: 'Si', x: 1.357675, y: 1.357675, z: 1.357675 },
-        ];
+      : [];
 
-  const lines = (logText || '').split(/\r?\n/);
+  const trimmedLog = (logText || '').trim();
+  if (!trimmedLog) {
+    return {
+      calculationType: (params?.control?.calculation as any) || 'scf',
+      converged: false,
+      allScfSteps: [],
+      ionicSteps: [],
+      bandStructure: null,
+      dosData: [],
+      totalEnergyRy: 0,
+      totalEnergyEV: 0,
+      fermiEnergyEV: 0,
+      bandGapEV: undefined,
+      isMetallic: false,
+      maxForceRyBohr: 0,
+      totalForceRyBohr: 0,
+      stressKbar: 0,
+      hasForcesInLog: false,
+      hasStressInLog: false,
+      formula: fallbackStructure?.formula || 'pwscf',
+      nat: defaultAtoms.length,
+      wallTimeSec: 0,
+      cpuTimeSec: 0,
+      extractedStructure: null,
+    };
+  }
+
+  const lines = trimmedLog.split(/\r?\n/);
+  const isSealSyntheticHeader = trimmedLog.includes(
+    'This run was initiated by Quantum ESPRESSO Studio (Seal)'
+  );
 
   let alatAng = 5.4307;
-  let fermiEnergyEV = 6.421;
+  let fermiEnergyEV = 0;
+  let hasExplicitFermi = false;
   let bandGapEV: number | undefined = undefined;
   let isMetallic = false;
   let converged = false;
-  let wallTimeSec = 2.5;
-  let cpuTimeSec = 2.2;
+  let wallTimeSec = 0;
+  let cpuTimeSec = 0;
   let hasForcesInLog = false;
   let hasStressInLog = false;
-  let detectedCalcType: 'scf' | 'relax' | 'vc-relax' | 'bands' | 'nscf' | 'md' =
+  let detectedCalcType: 'scf' | 'relax' | 'vc-relax' | 'bands' | 'nscf' | 'md' | 'dos' =
     (params?.control?.calculation as any) || 'scf';
+
+  const extractedParams: NonNullable<ParsedQELogData['extractedParams']> = {};
 
   // Working state while scanning log lines
   const parsedIonicSteps: IonicStep[] = [];
@@ -382,6 +442,19 @@ export function parseQEOutputLog(
 
   let currentLattice: number[][] = defaultLattice.map((r) => [...r]);
   let currentAtoms: Atom[] = defaultAtoms.map((a) => ({ ...a }));
+  let hasParsedLattice = false;
+  let hasParsedAtoms = false;
+  let inFinalCoordsBlock = false;
+  let headerAtoms: Atom[] = [];
+  let headerAxisRows: number[][] = [];
+  let inCrystCoordSection = false;
+
+  // Band structure state (capture latest full set of k-point eigenvalues)
+  let currentBandKPoints: { coords: [number, number, number]; energiesEV: number[] }[] = [];
+  let latestBandKPoints: { coords: [number, number, number]; energiesEV: number[] }[] = [];
+
+  // DOS table state (for dos.x outputs / .dos files)
+  const rawDosPoints: DOSPoint[] = [];
 
   const finalizeCurrentScfIteration = (accuracyVal?: number) => {
     if (pendingEnergyRy === null) return;
@@ -423,9 +496,8 @@ export function parseQEOutputLog(
       convergedEnergyRy ??
       (currentScfSteps.length > 0
         ? currentScfSteps[currentScfSteps.length - 1].totalEnergyRy
-        : -15.82394);
+        : 0);
 
-    // Ensure at least one SCF step is present if only "! total energy =" was in the log
     const stepsForThisCycle: SCFStep[] =
       currentScfSteps.length > 0
         ? [...currentScfSteps]
@@ -438,7 +510,7 @@ export function parseQEOutputLog(
               totalEnergyEV: Number((finalEnergyRy * RY_TO_EV).toFixed(6)),
               deRy: 0,
               accuracy: 1e-8,
-              cpuTime: pendingCpu || stepNum * 1.2,
+              cpuTime: pendingCpu || 0,
             },
           ];
 
@@ -468,6 +540,38 @@ export function parseQEOutputLog(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
+    // Check DOS header "#  E (eV)   dos(E)   Int dos(E) EFermi =   6.421 eV"
+    if (/EFermi\s*=\s*([-0-9.E+]+)/i.test(line)) {
+      const efm = line.match(/EFermi\s*=\s*([-0-9.E+]+)/i);
+      if (efm) {
+        fermiEnergyEV = parseFloat(efm[1]);
+        hasExplicitFermi = true;
+      }
+      detectedCalcType = 'dos';
+    }
+
+    // Check tabular DOS lines (3 or 4 numeric columns: E, dos, [dos_dw], int_dos)
+    const trimmedLine = line.trim();
+    if (trimmedLine && !trimmedLine.startsWith('#') && !trimmedLine.startsWith('!')) {
+      const dosRowMatch = trimmedLine.match(
+        /^([-+]?\d+\.\d+(?:[eEdD][-+]?\d+)?)\s+([-+]?\d+\.\d+(?:[eEdD][-+]?\d+)?)\s+([-+]?\d+\.\d+(?:[eEdD][-+]?\d+)?)(?:\s+([-+]?\d+\.\d+(?:[eEdD][-+]?\d+)?))?$/
+      );
+      if (dosRowMatch && parsedIonicSteps.length === 0 && currentScfSteps.length === 0) {
+        const eVal = parseFloat(dosRowMatch[1].replace(/[dD]/g, 'e'));
+        const dosVal = parseFloat(dosRowMatch[2].replace(/[dD]/g, 'e'));
+        const intVal = parseFloat(
+          (dosRowMatch[4] ?? dosRowMatch[3]).replace(/[dD]/g, 'e')
+        );
+        if (!Number.isNaN(eVal) && !Number.isNaN(dosVal) && dosVal >= 0) {
+          rawDosPoints.push({
+            energyEV: eVal,
+            dos: dosVal,
+            integratedDos: intVal,
+          });
+        }
+      }
+    }
+
     // Detect calculation type hints in log
     if (/vc-relax|CELL_PARAMETERS/i.test(line)) {
       detectedCalcType = 'vc-relax';
@@ -476,34 +580,149 @@ export function parseQEOutputLog(
       detectedCalcType === 'scf'
     ) {
       detectedCalcType = 'relax';
+    } else if (/End of band structure calculation/i.test(line)) {
+      detectedCalcType = 'bands';
     }
 
     // Parse lattice parameter (alat)
     const alatMatch = line.match(/lattice parameter \(alat\)\s*=\s*([0-9.]+)\s*a\.u\./i);
     if (alatMatch) {
       const val = parseFloat(alatMatch[1]);
-      // Handle both Bohr and direct Ångström conventions
-      alatAng = val > 7.5 ? val * BOHR_TO_ANGSTROM : val;
+      // Standard QE prints alat in Bohr (a.u.); Seal's internal generator prints 5.4307 a.u.
+      alatAng = isSealSyntheticHeader ? val : val * BOHR_TO_ANGSTROM;
     }
 
-    // Parse initial Cartesian positions (alat units): tau( 1 ) = ( x y z )
+    // Parse QE input parameter summary from header
+    const ibravMatch = line.match(/bravais-lattice index\s*=\s*([-0-9]+)/i);
+    if (ibravMatch) {
+      extractedParams.ibrav = parseInt(ibravMatch[1], 10);
+    }
+    const ecutwfcMatch = line.match(/kinetic-energy cutoff\s*=\s*([0-9.E+-]+)\s*Ry/i);
+    if (ecutwfcMatch) {
+      extractedParams.ecutwfc = parseFloat(ecutwfcMatch[1]);
+    }
+    const ecutrhoMatch = line.match(/charge-density cutoff\s*=\s*([0-9.E+-]+)\s*Ry/i);
+    if (ecutrhoMatch) {
+      extractedParams.ecutrho = parseFloat(ecutrhoMatch[1]);
+    }
+    const convThrMatch = line.match(/convergence threshold\s*=\s*([0-9.E+-]+)/i);
+    if (convThrMatch) {
+      extractedParams.conv_thr = parseFloat(convThrMatch[1]);
+    }
+    const mixingBetaMatch = line.match(/mixing beta\s*=\s*([0-9.E+-]+)/i);
+    if (mixingBetaMatch) {
+      extractedParams.mixing_beta = parseFloat(mixingBetaMatch[1]);
+    }
+    const savePrefixMatch = line.match(/Writing.*?data file\s+([A-Za-z0-9_.-]+)\.save/i);
+    if (savePrefixMatch) {
+      extractedParams.prefix = savePrefixMatch[1];
+    }
+
+    if (/Begin final coordinates/i.test(line)) {
+      inFinalCoordsBlock = true;
+    } else if (/End final coordinates/i.test(line)) {
+      inFinalCoordsBlock = false;
+    }
+
+    // Parse crystal axes from header: a(1) = ( 1.000000 0.000000 0.000000 )
+    const axisMatch = line.match(
+      /^\s*a\(([123])\)\s*=\s*\(\s*([-0-9.E+]+)\s+([-0-9.E+]+)\s+([-0-9.E+]+)\s*\)/
+    );
+    if (axisMatch && parsedIonicSteps.length === 0) {
+      const idx = parseInt(axisMatch[1], 10) - 1;
+      headerAxisRows[idx] = [
+        Number((parseFloat(axisMatch[2]) * alatAng).toFixed(6)),
+        Number((parseFloat(axisMatch[3]) * alatAng).toFixed(6)),
+        Number((parseFloat(axisMatch[4]) * alatAng).toFixed(6)),
+      ];
+      if (headerAxisRows[0] && headerAxisRows[1] && headerAxisRows[2]) {
+        currentLattice = [headerAxisRows[0], headerAxisRows[1], headerAxisRows[2]];
+        hasParsedLattice = true;
+      }
+    }
+
+    if (/positions \(alat units\)/i.test(line)) {
+      inCrystCoordSection = false;
+      headerAtoms = [];
+    } else if (/positions \(cryst\.\s*coord\.\)/i.test(line)) {
+      inCrystCoordSection = true;
+      headerAtoms = [];
+    }
+
+    // Parse initial atomic positions: tau( 1 ) = ( x y z )
     const tauMatch = line.match(
-      /^\s*\d+\s+([A-Z][a-z]?)\s+tau\(\s*(\d+)\s*\)\s*=\s*\(\s*([-0-9.E+]+)\s+([-0-9.E+]+)\s+([-0-9.E+]+)\s*\)/
+      /^\s*\d+\s+([A-Z][a-z]?[0-9]*)\s+tau\(\s*(\d+)\s*\)\s*=\s*\(\s*([-0-9.E+]+)\s+([-0-9.E+]+)\s+([-0-9.E+]+)\s*\)/
     );
     if (tauMatch && parsedIonicSteps.length === 0) {
-      const sym = tauMatch[1];
+      const sym = tauMatch[1].replace(/[0-9]/g, '');
       const idx = parseInt(tauMatch[2], 10) - 1;
-      const x = parseFloat(tauMatch[3]) * alatAng;
-      const y = parseFloat(tauMatch[4]) * alatAng;
-      const z = parseFloat(tauMatch[5]) * alatAng;
+      const rx = parseFloat(tauMatch[3]);
+      const ry = parseFloat(tauMatch[4]);
+      const rz = parseFloat(tauMatch[5]);
+      let x = rx * alatAng;
+      let y = ry * alatAng;
+      let z = rz * alatAng;
+      if (inCrystCoordSection) {
+        [x, y, z] = fracToCartesian(rx, ry, rz, currentLattice);
+      }
       if (idx >= 0) {
-        currentAtoms[idx] = {
-          ...(currentAtoms[idx] || {}),
+        headerAtoms[idx] = {
           symbol: sym,
           x: Number(x.toFixed(6)),
           y: Number(y.toFixed(6)),
           z: Number(z.toFixed(6)),
         };
+        currentAtoms = headerAtoms.filter(Boolean).map((a) => ({ ...a }));
+        hasParsedAtoms = currentAtoms.length > 0;
+      }
+    }
+
+    // Parse k-point band eigenvalues block in pw.x .out:
+    // k = 0.0000 0.0000 0.0000 (   289 PWs)   bands (ev):
+    // or k = 0.0000 0.0000 0.0000     band energies (ev):
+    const kBandMatch = line.match(
+      /^\s*k\s*=\s*([-0-9.E+]+)\s+([-0-9.E+]+)\s+([-0-9.E+]+).*?(?:bands|band energies)\s*\(ev\)\s*:/i
+    );
+    if (kBandMatch) {
+      const kx = parseFloat(kBandMatch[1]);
+      const ky = parseFloat(kBandMatch[2]);
+      const kz = parseFloat(kBandMatch[3]);
+      const energies: number[] = [];
+      let j = i + 1;
+      while (j < lines.length && j < i + 200) {
+        const bLine = lines[j].trim();
+        if (!bLine) {
+          if (energies.length > 0) break;
+          j++;
+          continue;
+        }
+        if (/^[+-]?\d+\.\d+/.test(bLine) && !/[a-zA-Z]/.test(bLine.replace(/[eEdD][+-]?\d+/g, ''))) {
+          const vals = bLine
+            .split(/\s+/)
+            .map((v) => parseFloat(v.replace(/[dD]/g, 'e')))
+            .filter((v) => !Number.isNaN(v));
+          energies.push(...vals);
+          j++;
+        } else {
+          break;
+        }
+      }
+      if (energies.length > 0) {
+        currentBandKPoints.push({
+          coords: [kx, ky, kz],
+          energiesEV: energies,
+        });
+        latestBandKPoints = [...currentBandKPoints];
+      }
+      i = j - 1;
+      continue;
+    }
+
+    // Reset currentBandKPoints when a new self-consistent or band calculation starts
+    if (/Self-Consistent Calculation|Band Structure Calculation|Starting self-consistent cycle/i.test(line)) {
+      if (currentBandKPoints.length > 0) {
+        latestBandKPoints = [...currentBandKPoints];
+        currentBandKPoints = [];
       }
     }
 
@@ -574,6 +793,7 @@ export function parseQEOutputLog(
     const fermiMatch = line.match(/the Fermi energy is\s*([-0-9.E+]+)\s*ev/i);
     if (fermiMatch) {
       fermiEnergyEV = parseFloat(fermiMatch[1]);
+      hasExplicitFermi = true;
       continue;
     }
 
@@ -586,7 +806,14 @@ export function parseQEOutputLog(
       const lumo = parseFloat(homoLumoMatch[2]);
       bandGapEV = Math.max(0, Number((lumo - homo).toFixed(3)));
       fermiEnergyEV = Number(((homo + lumo) / 2).toFixed(4));
+      hasExplicitFermi = true;
       isMetallic = bandGapEV <= 0.01;
+      continue;
+    }
+    const homoOnlyMatch = line.match(/highest occupied level \(ev\):\s*([-0-9.E+]+)/i);
+    if (homoOnlyMatch) {
+      fermiEnergyEV = parseFloat(homoOnlyMatch[1]);
+      hasExplicitFermi = true;
       continue;
     }
 
@@ -766,10 +993,13 @@ export function parseQEOutputLog(
       }
       if (newLat.length === 3) {
         currentLattice = newLat;
-        const targetStep = parsedIonicSteps[parsedIonicSteps.length - 1];
-        if (targetStep) {
-          targetStep.lattice = currentLattice.map((r) => [...r]);
-          targetStep.cellVolumeAng3 = Number(calculateCellVolume(currentLattice).toFixed(4));
+        hasParsedLattice = true;
+        if (isSealSyntheticHeader || inFinalCoordsBlock) {
+          const targetStep = parsedIonicSteps[parsedIonicSteps.length - 1];
+          if (targetStep) {
+            targetStep.lattice = currentLattice.map((r) => [...r]);
+            targetStep.cellVolumeAng3 = Number(calculateCellVolume(currentLattice).toFixed(4));
+          }
         }
         i += 3;
       }
@@ -786,10 +1016,10 @@ export function parseQEOutputLog(
         const pLine = lines[j].trim();
         if (!pLine || /^End final coordinates/i.test(pLine)) break;
         const aMatch = pLine.match(
-          /^([A-Z][a-z]?)\s+([-0-9.E+]+)\s+([-0-9.E+]+)\s+([-0-9.E+]+)(?:\s+([01])\s+([01])\s+([01]))?/
+          /^([A-Z][a-z]?[0-9]*)\s+([-0-9.E+]+)\s+([-0-9.E+]+)\s+([-0-9.E+]+)(?:\s+([01])\s+([01])\s+([01]))?/
         );
         if (!aMatch) break;
-        const symbol = aMatch[1];
+        const symbol = aMatch[1].replace(/[0-9]/g, '');
         let x = parseFloat(aMatch[2]);
         let y = parseFloat(aMatch[3]);
         let z = parseFloat(aMatch[4]);
@@ -812,7 +1042,7 @@ export function parseQEOutputLog(
         const if_pos: [number, number, number] | undefined =
           aMatch[5] !== undefined && aMatch[6] !== undefined && aMatch[7] !== undefined
             ? [parseInt(aMatch[5], 10), parseInt(aMatch[6], 10), parseInt(aMatch[7], 10)]
-            : defaultAtoms[newAtoms.length]?.if_pos;
+            : undefined;
 
         newAtoms.push({
           symbol,
@@ -825,9 +1055,12 @@ export function parseQEOutputLog(
       }
       if (newAtoms.length > 0) {
         currentAtoms = newAtoms;
-        const targetStep = parsedIonicSteps[parsedIonicSteps.length - 1];
-        if (targetStep) {
-          targetStep.atoms = currentAtoms.map((a) => ({ ...a }));
+        hasParsedAtoms = true;
+        if (isSealSyntheticHeader || inFinalCoordsBlock) {
+          const targetStep = parsedIonicSteps[parsedIonicSteps.length - 1];
+          if (targetStep) {
+            targetStep.atoms = currentAtoms.map((a) => ({ ...a }));
+          }
         }
         i = j - 1;
       }
@@ -847,44 +1080,87 @@ export function parseQEOutputLog(
     commitIonicStep();
   }
 
-  // Fallback if log was empty or unparseable
-  const baseStruct: CrystalStructure = fallbackStructure || {
-    lattice: defaultLattice,
-    atoms: defaultAtoms,
-    formula: 'Si8',
-  };
+  // Build BandStructure if k-point eigenvalues were found in .out
+  let bandStructure: ParsedBandStructure | null = null;
+  if (latestBandKPoints.length > 0) {
+    let cumDist = 0;
+    const kPoints: BandKPoint[] = latestBandKPoints.map((kp, idx) => {
+      if (idx > 0) {
+        const prev = latestBandKPoints[idx - 1].coords;
+        const dk = Math.hypot(
+          kp.coords[0] - prev[0],
+          kp.coords[1] - prev[1],
+          kp.coords[2] - prev[2]
+        );
+        cumDist += dk > 1e-6 ? dk : 1;
+      }
+      return {
+        index: idx + 1,
+        coords: kp.coords,
+        distance: Number(cumDist.toFixed(5)),
+        energiesEV: kp.energiesEV,
+      };
+    });
 
-  if (parsedIonicSteps.length === 0) {
-    const fallbackSteps = buildRealisticIonicTrajectory(
-      baseStruct,
-      params,
-      detectedCalcType,
-      -126.59152
-    );
-    parsedIonicSteps.push(...fallbackSteps);
+    const numBands = Math.max(...kPoints.map((k) => k.energiesEV.length));
+    const bands = Array.from({ length: numBands }, (_, bIdx) => ({
+      bandIndex: bIdx + 1,
+      points: kPoints
+        .filter((kp) => kp.energiesEV[bIdx] !== undefined)
+        .map((kp) => ({
+          kDistance: kp.distance,
+          kIndex: kp.index,
+          energyEV: kp.energiesEV[bIdx],
+        })),
+    }));
+
+    bandStructure = {
+      kPoints,
+      bands,
+      fermiEnergyEV: hasExplicitFermi ? fermiEnergyEV : undefined,
+    };
+  } else {
+    // Also support 2-column bands.dat.gnu format if user loaded a gnu/bands file
+    const gnuBlocks: { kDistance: number; kIndex: number; energyEV: number }[][] = [];
+    let currentBlock: { kDistance: number; kIndex: number; energyEV: number }[] = [];
+    for (const rawL of lines) {
+      const t = rawL.trim();
+      if (!t) {
+        if (currentBlock.length > 0) {
+          gnuBlocks.push(currentBlock);
+          currentBlock = [];
+        }
+        continue;
+      }
+      const m = t.match(/^([-+]?\d+\.\d+(?:[eEdD][-+]?\d+)?)\s+([-+]?\d+\.\d+(?:[eEdD][-+]?\d+)?)$/);
+      if (m) {
+        currentBlock.push({
+          kDistance: parseFloat(m[1]),
+          kIndex: currentBlock.length + 1,
+          energyEV: parseFloat(m[2]),
+        });
+      }
+    }
+    if (currentBlock.length > 0) gnuBlocks.push(currentBlock);
+    if (gnuBlocks.length > 1 && gnuBlocks[0].length > 1) {
+      bandStructure = {
+        kPoints: gnuBlocks[0].map((pt, idx) => ({
+          index: idx + 1,
+          coords: [pt.kDistance, 0, 0],
+          distance: pt.kDistance,
+          energiesEV: gnuBlocks.map((b) => b[idx]?.energyEV ?? 0),
+        })),
+        bands: gnuBlocks.map((pts, bIdx) => ({
+          bandIndex: bIdx + 1,
+          points: pts,
+        })),
+        fermiEnergyEV: hasExplicitFermi ? fermiEnergyEV : undefined,
+      };
+    }
   }
 
-  // Ensure every parsed ionic step has complete force & stress records for smooth charting
-  const lastStep = parsedIonicSteps[parsedIonicSteps.length - 1];
-  const syntheticSteps = buildRealisticIonicTrajectory(
-    baseStruct,
-    params,
-    detectedCalcType,
-    lastStep.totalEnergyRy,
-    parsedIonicSteps.length
-  );
-
-  parsedIonicSteps.forEach((step, idx) => {
-    const synth = syntheticSteps[Math.min(idx, syntheticSteps.length - 1)];
-    if (!step.atomicForces || step.atomicForces.length === 0) {
-      step.atomicForces = synth.atomicForces;
-      step.maxForceRyBohr = step.maxForceRyBohr ?? synth.maxForceRyBohr;
-      step.totalForceRyBohr = step.totalForceRyBohr ?? synth.totalForceRyBohr;
-    }
-    if (!step.stress) {
-      step.stress = synth.stress;
-    }
-  });
+  // Use only explicit DOS data extracted from the file
+  const dosData: DOSPoint[] = rawDosPoints;
 
   const allScfSteps: SCFStep[] = [];
   let gIdx = 0;
@@ -901,38 +1177,69 @@ export function parseQEOutputLog(
   });
 
   const finalIonic = parsedIonicSteps[parsedIonicSteps.length - 1];
-  const finalAtoms = finalIonic?.atoms || defaultAtoms;
+  const finalAtoms =
+    hasParsedAtoms && currentAtoms.length > 0
+      ? currentAtoms
+      : finalIonic?.atoms && finalIonic.atoms.length > 0
+      ? finalIonic.atoms
+      : currentAtoms;
+  const finalLattice =
+    hasParsedLattice && currentLattice.length === 3
+      ? currentLattice
+      : finalIonic?.lattice && finalIonic.lattice.length === 3
+      ? finalIonic.lattice
+      : currentLattice;
+
+  const computedFormula = (() => {
+    if (!finalAtoms || finalAtoms.length === 0) return '';
+    const counts: Record<string, number> = {};
+    finalAtoms.forEach((a) => {
+      counts[a.symbol] = (counts[a.symbol] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([k, v]) => (v > 1 ? `${k}${v}` : k))
+      .join('');
+  })();
+
   const formula =
+    (hasParsedAtoms && computedFormula) ||
+    extractedParams.prefix ||
     fallbackStructure?.formula ||
-    (() => {
-      const counts: Record<string, number> = {};
-      finalAtoms.forEach((a) => {
-        counts[a.symbol] = (counts[a.symbol] || 0) + 1;
-      });
-      return Object.entries(counts)
-        .map(([k, v]) => (v > 1 ? `${k}${v}` : k))
-        .join('');
-    })() ||
+    computedFormula ||
     'pwscf';
+
+  const extractedStructure: CrystalStructure | null =
+    hasParsedAtoms && finalAtoms.length > 0
+      ? {
+          lattice: finalLattice.map((r) => [...r]),
+          atoms: finalAtoms.map((a) => ({ ...a })),
+          formula,
+        }
+      : null;
 
   return {
     calculationType: detectedCalcType,
     converged: converged || parsedIonicSteps.length > 0,
     allScfSteps,
     ionicSteps: parsedIonicSteps,
-    totalEnergyRy: finalIonic.totalEnergyRy,
-    totalEnergyEV: finalIonic.totalEnergyEV,
+    bandStructure,
+    dosData,
+    totalEnergyRy: finalIonic?.totalEnergyRy ?? 0,
+    totalEnergyEV: finalIonic?.totalEnergyEV ?? 0,
     fermiEnergyEV,
     bandGapEV,
     isMetallic,
-    maxForceRyBohr: finalIonic.maxForceRyBohr ?? 0.00021,
-    totalForceRyBohr: finalIonic.totalForceRyBohr ?? 0.00034,
-    stressKbar: finalIonic.stress?.pressureKbar ?? -0.02,
-    hasForcesInLog: hasForcesInLog || Boolean(params?.control?.tprnfor),
-    hasStressInLog: hasStressInLog || Boolean(params?.control?.tstress),
+    maxForceRyBohr: finalIonic?.maxForceRyBohr ?? 0,
+    totalForceRyBohr: finalIonic?.totalForceRyBohr ?? 0,
+    stressKbar: finalIonic?.stress?.pressureKbar ?? 0,
+    hasForcesInLog,
+    hasStressInLog,
     formula,
     nat: finalAtoms.length,
     wallTimeSec,
     cpuTimeSec,
+    extractedStructure,
+    extractedParams,
   };
 }
